@@ -16,3 +16,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
 $run = Start-Process -FilePath $testExe -ArgumentList ('"' + $testDir + '"') -WindowStyle Hidden -Wait -PassThru
 Get-Content -LiteralPath (Join-Path $testDir 'desktop-checks.txt')
 if ($run.ExitCode -ne 0) { throw 'Desktop checks failed.' }
+$probeExe = Join-Path $testDir 'HitProbe.exe'
+& (Join-Path $fwDir 'csc.exe') /nologo /target:winexe /codepage:65001 ('/out:' + $probeExe) ('/reference:' + (Join-Path $testDir 'BitGlance.exe')) @refs (Join-Path $PSScriptRoot 'HitProbe.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Hit probe build failed.' }
+$probe = Start-Process -FilePath $probeExe -ArgumentList ('"' + $testDir + '"') -WindowStyle Hidden -Wait -PassThru
+Get-Content -LiteralPath (Join-Path $testDir 'hit-probe.txt')
+if ($probe.ExitCode -ne 0) { throw 'Native hit testing failed.' }

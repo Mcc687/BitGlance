@@ -18,7 +18,15 @@ class DesktopChecks {
  static List<string> log=new List<string>();static int code=0;
  static void Check(bool value,string name){if(!value)throw new Exception(name);log.Add("PASS "+name);}
  static void Click(Window w,string name){((Button)w.FindName(name)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));}
- static void DoubleClick(Window w,string name){((Control)w.FindName(name)).RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,0,MouseButton.Left){RoutedEvent=Control.MouseDoubleClickEvent});}
+ static int inputTime=1000;
+ static void DoubleClick(Window w,string name){
+  if(name!="MiniTarget"){((Control)w.FindName(name)).RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,0,MouseButton.Left){RoutedEvent=Control.MouseDoubleClickEvent});return;}
+  for(int i=0;i<2;i++){
+   w.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,inputTime,MouseButton.Left){RoutedEvent=UIElement.PreviewMouseLeftButtonDownEvent});
+   w.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,inputTime+20,MouseButton.Left){RoutedEvent=UIElement.PreviewMouseLeftButtonUpEvent});inputTime+=80;
+  }inputTime+=1000;
+ }
+ static void Pointer(Desktop desktop,string method,params object[] args){typeof(Desktop).GetMethod(method,BindingFlags.Instance|BindingFlags.NonPublic).Invoke(desktop,args);}
  static string Text(Window w,string name){return ((TextBlock)w.FindName(name)).Text;}
  static async Task WaitFor(Func<bool> predicate){for(int i=0;i<80;i++){if(predicate())return;await Task.Delay(250);}throw new Exception("Timed out waiting for UI state");}
  static void Configure(Window w,int opacity,bool change,bool unit,string screenshot=null){
@@ -111,8 +119,22 @@ class DesktopChecks {
     Check(w.Opacity==1&&((Border)w.FindName("Shell")).Opacity==0.35&&((ContentControl)w.FindName("MiniTarget")).Opacity==1,"35 percent fades background only");
     Render(w,Path.Combine(folder,"mini-35.png"));
     Configure(w,0,true,true);await Task.Delay(250);var transparent=Render(w,Path.Combine(folder,"mini-0.png"));
-    Check(((Border)w.FindName("Shell")).Opacity==0&&Alpha(transparent,24,transparent.PixelHeight/2)==0,"0 percent produces a fully transparent background pixel");
+    Check(((Border)w.FindName("Shell")).Opacity==0&&Alpha(transparent,24,transparent.PixelHeight/2)==1,"0 percent keeps an alpha-1 input surface to stop click-through");
     Check(OpaqueDigits(w,transparent)>100,"price digits remain fully opaque at zero background");
+    var startPoint=w.PointToScreen(new Point(0,0));
+    for(int i=0;i<10;i++){
+     var pressPoint=w.PointToScreen(new Point(w.Width/2,w.Height/2));var beforeDrag=w.PointToScreen(new Point(0,0));var end=pressPoint+new Vector(i%2==0?30:-30,i%2==0?12:-12);
+     Pointer(desktop,"BeginMiniPointer",pressPoint,(uint)(10000+i*50));Check(w.IsMouseCaptured,"repeat drag "+(i+1)+" captures input");
+     Pointer(desktop,"MoveMiniPointer",end);Pointer(desktop,"EndMiniPointer",end);await Task.Delay(20);
+     var afterDrag=w.PointToScreen(new Point(0,0));Check(Math.Abs(afterDrag.X-beforeDrag.X-(end.X-pressPoint.X))<2&&Math.Abs(afterDrag.Y-beforeDrag.Y-(end.Y-pressPoint.Y))<2&&!w.IsMouseCaptured&&!w.ShowInTaskbar,"repeat drag "+(i+1)+" moves the native window without expanding");
+    }
+    Check((w.PointToScreen(new Point(0,0))-startPoint).Length<2,"alternating repeated drags return to the starting screen location");
+    for(int i=0;i<11;i++){
+     DoubleClick(w,"MiniTarget");await Task.Delay(60);Check(w.ShowInTaskbar&&!w.IsMouseCaptured,"repeat raw double click "+(i+1)+" expands and releases capture");
+     DoubleClick(w,"PriceTarget");await Task.Delay(60);Check(!w.ShowInTaskbar,"repeat double-click cycle "+(i+1)+" returns to mini");
+    }
+    var cancelPoint=w.PointToScreen(new Point(30,30));Pointer(desktop,"BeginMiniPointer",cancelPoint,25000u);w.ReleaseMouseCapture();
+    Pointer(desktop,"EndMiniPointer",cancelPoint);Check(!w.ShowInTaskbar&&!w.IsMouseCaptured,"unexpected capture loss does not expand or leave a stuck gesture");
     Configure(w,0,false,true);await Task.Delay(150);
     Check(((TextBlock)w.FindName("MiniStatus")).Visibility==Visibility.Collapsed&&((TextBlock)w.FindName("MiniUnit")).Visibility==Visibility.Visible,"change visibility can be disabled independently");
     Configure(w,0,true,false);await Task.Delay(150);

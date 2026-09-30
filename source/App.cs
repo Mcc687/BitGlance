@@ -22,7 +22,7 @@ using Forms=System.Windows.Forms;
 
 [assembly:AssemblyTitle("BitGlance · 比特一瞥")]
 [assembly:AssemblyDescription("BTC ETH SOL USDT perpetual desktop price widget")]
-[assembly:AssemblyVersion("1.2.0.0")]
+[assembly:AssemblyVersion("1.2.1.0")]
 [assembly:AssemblyCopyright("BitGlance contributors; window placement based on PayDance © 2026 Mr.Baoboer")]
 namespace BitGlance {
  public sealed class Preferences {
@@ -63,6 +63,8 @@ namespace BitGlance {
   readonly Application app;readonly Window window;readonly PriceChart chart=new PriceChart();readonly MarketClient client=new MarketClient();
   readonly DispatcherTimer timer=new DispatcherTimer();readonly string settingsPath;
   Preferences prefs;Forms.NotifyIcon tray;Quote quote;CancellationTokenSource cts=new CancellationTokenSource();
+  readonly MiniGesture miniGesture=new MiniGesture(Forms.SystemInformation.DoubleClickTime,Math.Max(4,Forms.SystemInformation.DragSize.Width),Math.Max(4,Forms.SystemInformation.DragSize.Height),Forms.SystemInformation.DoubleClickSize.Width/2.0,Forms.SystemInformation.DoubleClickSize.Height/2.0);
+  RECT miniDragOrigin;
   DateTime next=DateTime.UtcNow,chartAt=DateTime.MinValue;bool loading,chartLoading,chartFailed,week,offline,exiting;int generation,chartGeneration,failures;string errorText="";
   T Find<T>(string name) where T:FrameworkElement {return (T)window.FindName(name);}
   void Text(string name,string value){Find<TextBlock>(name).Text=value;}
@@ -78,7 +80,6 @@ namespace BitGlance {
    chart.ViewChanged+=UpdateChartAxis;
    Bind("CloseButton",Exit);Bind("HideButton",()=>{CapturePosition();Save();window.Hide();});
    Find<ContentControl>("PriceTarget").MouseDoubleClick+=(s,e)=>{if(e.ChangedButton==MouseButton.Left){SetMode(true);e.Handled=true;}};
-   Find<ContentControl>("MiniTarget").MouseDoubleClick+=(s,e)=>{if(e.ChangedButton==MouseButton.Left){ShowFull();e.Handled=true;}};
    Bind("BtcButton",()=>SelectSymbol("BTCUSDT"));Bind("EthButton",()=>SelectSymbol("ETHUSDT"));Bind("SolButton",()=>SelectSymbol("SOLUSDT"));
    Bind("ThemeButton",()=>{prefs.Dark=!prefs.Dark;ApplyTheme();Save();});
    Bind("PinButton",()=>{prefs.Pinned=!prefs.Pinned;ApplyPinned();Save();});
@@ -87,7 +88,13 @@ namespace BitGlance {
    Bind("LineButton",()=>SetChartMode(false));Bind("CandleButton",()=>SetChartMode(true));Bind("LatestButton",()=>chart.Latest());
    foreach(var interval in MarketClient.Intervals){string value=interval;Bind("Interval"+value+"Button",()=>SetInterval(value));}
    Find<Grid>("TitleBar").MouseLeftButtonDown+=Drag;
-   Find<Grid>("MiniView").MouseLeftButtonDown+=(s,e)=>{if(prefs.Mini&&e.ClickCount==1)Drag(s,e);};
+   window.PreviewMouseLeftButtonDown+=(s,e)=>{if(!prefs.Mini)return;BeginMiniPointer(MouseScreenPoint(),unchecked((uint)e.Timestamp));e.Handled=true;};
+   window.PreviewMouseMove+=(s,e)=>{if(!miniGesture.Active)return;MoveMiniPointer(MouseScreenPoint());e.Handled=true;};
+   window.PreviewMouseLeftButtonUp+=(s,e)=>{if(!miniGesture.Active)return;EndMiniPointer(MouseScreenPoint());e.Handled=true;};
+   window.LostMouseCapture+=(s,e)=>{if(miniGesture.Active)CancelMiniPointer();};
+   window.Deactivated+=(s,e)=>CancelMiniPointer();
+   window.IsVisibleChanged+=(s,e)=>{if(!window.IsVisible)CancelMiniPointer();};
+   window.PreviewMouseRightButtonDown+=(s,e)=>CancelMiniPointer();
    window.KeyDown+=(s,e)=>{if(e.Key==Key.F5){chartAt=DateTime.MinValue;Refresh();}if(e.Key==Key.Escape && prefs.Mini)ShowFull();if(e.Key==Key.M && Keyboard.Modifiers==ModifierKeys.Control)SetMode(!prefs.Mini);};
    window.Closing+=(s,e)=>{CapturePosition();Save();Cleanup();};
    window.Closed+=(s,e)=>app.Shutdown();
@@ -109,11 +116,35 @@ namespace BitGlance {
    while(obj!=null){if(obj is Button)return;obj=VisualTreeHelper.GetParent(obj);}
    if(e.LeftButton==MouseButtonState.Pressed){try{window.DragMove();CapturePosition();Save();}catch(InvalidOperationException){ }e.Handled=true;}
   }
+  void BeginMiniPointer(Point screen,uint timestamp){
+   if(!prefs.Mini||!window.IsEnabled||!window.IsVisible)return;
+   if(!GetWindowRect(new WindowInteropHelper(window).Handle,out miniDragOrigin))return;
+   // Capture can synchronously raise a move event; arm the gesture afterwards.
+   if(window.CaptureMouse())miniGesture.Down(screen,timestamp);else miniGesture.Cancel();
+  }
+  Point MouseScreenPoint(){POINT p;return GetCursorPos(out p)?new Point(p.X,p.Y):window.PointToScreen(Mouse.GetPosition(window));}
+  void MoveMiniPointer(Point screen){
+   if(!miniGesture.Move(screen))return;
+   var delta=screen-miniGesture.Start;
+   SetWindowPos(new WindowInteropHelper(window).Handle,IntPtr.Zero,miniDragOrigin.Left+(int)Math.Round(delta.X),miniDragOrigin.Top+(int)Math.Round(delta.Y),0,0,0x0015);
+  }
+  void EndMiniPointer(Point screen){
+   if(!miniGesture.Active)return;MoveMiniPointer(screen);var result=miniGesture.Up(screen);
+   if(window.IsMouseCaptured)window.ReleaseMouseCapture();
+   if(result==MiniGestureEnd.Drag){CapturePosition();Save();}
+   ResizeMini();if(result==MiniGestureEnd.DoubleClick)ShowFull();
+  }
+  void CancelMiniPointer(){
+   bool moved=miniGesture.Dragging;miniGesture.Cancel();
+   if(window.IsMouseCaptured)window.ReleaseMouseCapture();
+   if(moved){CapturePosition();Save();}if(prefs.Mini)ResizeMini();
+  }
   void ApplyPinned(){window.Topmost=prefs.Mini||prefs.Pinned;Find<Button>("PinButton").Foreground=prefs.Pinned?Brush("Accent"):Brush("Muted");}
   void ApplyMode(){
    Find<Grid>("FullView").Visibility=prefs.Mini?Visibility.Collapsed:Visibility.Visible;Find<Grid>("MiniView").Visibility=prefs.Mini?Visibility.Visible:Visibility.Collapsed;
    window.ShowInTaskbar=!prefs.Mini;window.Opacity=1;
    Find<Border>("Shell").Opacity=prefs.Mini?prefs.Opacity/100.0:1;
+   Find<Border>("MiniInputSurface").Visibility=prefs.Mini&&prefs.Opacity==0?Visibility.Visible:Visibility.Collapsed;
    Find<TextBlock>("MiniUnit").Visibility=prefs.ShowUnit?Visibility.Visible:Visibility.Collapsed;
    if(!prefs.Mini){
     double desired=prefs.Candles?744:642;window.Width=456;window.Height=Math.Min(desired,Math.Max(560,SystemParameters.WorkArea.Height-20));double shrink=desired-window.Height;
@@ -124,13 +155,13 @@ namespace BitGlance {
    ApplyPinned();
   }
   void ResizeMini(){
-   if(!prefs.Mini)return;
+   if(!prefs.Mini||miniGesture.Active)return;
    var text=new FormattedText(Find<TextBlock>("MiniPrice").Text,inv,FlowDirection.LeftToRight,new Typeface(new FontFamily("Segoe UI"),FontStyles.Normal,FontWeights.SemiBold,FontStretches.Normal),24,Brush("Ink"),1);
    window.Width=Math.Max(150,Math.Ceiling(text.WidthIncludingTrailingWhitespace)+(prefs.ShowUnit?37:0)+44);
    window.Height=Find<TextBlock>("MiniStatus").Visibility==Visibility.Visible?80:61;
   }
   void SetMode(bool mini){
-   if(prefs.Mini==mini)return;CapturePosition();prefs.Mini=mini;ApplyMode();window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(()=>{RestorePosition();Save();}));
+   if(prefs.Mini==mini)return;CancelMiniPointer();CapturePosition();prefs.Mini=mini;ApplyMode();window.Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(()=>{RestorePosition();Save();}));
   }
   public void ShowFull(){if(exiting)return;window.Show();window.WindowState=WindowState.Normal;SetMode(false);RestorePosition();window.Activate();}
   void ApplyTheme(){
@@ -238,7 +269,7 @@ namespace BitGlance {
    var interval=new ComboBox{Name="IntervalChoice",ItemsSource=new[]{"5 秒","15 秒","30 秒","60 秒"},SelectedIndex=Array.IndexOf(new[]{5,15,30,60},prefs.Interval),Height=29};panel.Children.Add(interval);
    var label=new TextBlock{Text="迷你窗背景不透明度  "+prefs.Opacity+"%",Margin=new Thickness(0,17,0,8)};panel.Children.Add(label);
    var slider=new Slider{Name="BackgroundOpacity",Minimum=0,Maximum=100,Value=prefs.Opacity,TickFrequency=5,IsSnapToTickEnabled=true};slider.ValueChanged+=(s,e)=>label.Text="迷你窗背景不透明度  "+(int)slider.Value+"%";panel.Children.Add(slider);
-   panel.Children.Add(new TextBlock{Text="只改变背景，数字保持完全不透明。",FontSize=11,Foreground=Brush("Muted"),Margin=new Thickness(0,7,0,12)});
+   panel.Children.Add(new TextBlock{Text="数字保持不透明；0% 保留近乎不可见的点击区域。",FontSize=11,Foreground=Brush("Muted"),Margin=new Thickness(0,7,0,12)});
    var change=new CheckBox{Name="ShowChangeOption",Content="迷你窗显示 24 小时涨跌幅",IsChecked=prefs.ShowChange,Margin=new Thickness(0,0,0,10),Foreground=Brush("Ink")};panel.Children.Add(change);
    var unit=new CheckBox{Name="ShowUnitOption",Content="迷你窗显示 USDT 单位",IsChecked=prefs.ShowUnit,Margin=new Thickness(0,0,0,10),Foreground=Brush("Ink")};panel.Children.Add(unit);
    panel.Children.Add(new TextBlock{Text="双击价格切换迷你 / 主窗口，拖动数字可移动。\n右键可切换币种；断线提示始终保留。",FontSize=11,Foreground=Brush("Muted"),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,5,0,13)});
@@ -252,11 +283,13 @@ namespace BitGlance {
    dialog.ShowDialog();
   }
   void About(Window owner){
-   MessageBox.Show(owner,"比特一瞥 BitGlance 1.2\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
+   MessageBox.Show(owner,"比特一瞥 BitGlance 1.2.1\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
   }
   public void Exit(){if(exiting)return;CapturePosition();Save();Cleanup();app.Shutdown();}
   void Cleanup(){if(exiting)return;exiting=true;Microsoft.Win32.SystemEvents.DisplaySettingsChanged-=DisplayChanged;timer.Stop();cts.Cancel();cts.Dispose();client.Dispose();if(tray!=null){tray.Visible=false;tray.Dispose();}}
   [StructLayout(LayoutKind.Sequential)]struct RECT{public int Left,Top,Right,Bottom;}
+  [StructLayout(LayoutKind.Sequential)]struct POINT{public int X,Y;}
+  [DllImport("user32.dll")]static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out RECT r);
   [DllImport("user32.dll")]static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int cx,int cy,uint flags);
   void CapturePosition(){

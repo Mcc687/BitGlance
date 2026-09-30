@@ -64,8 +64,27 @@ namespace BitGlance {
     p=WindowPlacement.Resolve(new SavedPosition{X=1919,Y=1039},new Size(450,600),areas);
     Assert(p.X+450<1920 && p.Y+600<1040,"edge position keeps full window reachable");
     Assert(WindowPlacement.Opacity(-1)==0 && WindowPlacement.Opacity(0)==0 && WindowPlacement.Opacity(999)==100,"background opacity supports exactly 0 through 100 percent");
+    GestureChecks();
     File.WriteAllLines(path,results.ToArray());return 0;
    }catch(Exception e){results.Add("FAIL "+e);File.WriteAllLines(path,results.ToArray());return 1;}
+  }
+  static void GestureChecks(){
+   var gesture=new MiniGesture(500,4,4,2,2);var point=new System.Windows.Point(100,100);
+   gesture.Down(point,100);Assert(!gesture.Move(new System.Windows.Point(102,101)),"small pointer tremor does not start a drag");
+   Assert(gesture.Up(point)==MiniGestureEnd.Click,"first mouse release stays a single click");
+   gesture.Down(point,200);Assert(gesture.Up(point)==MiniGestureEnd.DoubleClick,"second completed click expands within system timing");
+   gesture.Down(point,300);Assert(gesture.Up(point)==MiniGestureEnd.Click,"third click is not mistaken for another double click");
+   gesture.Down(point,400);gesture.Move(new System.Windows.Point(110,100));Assert(gesture.Up(new System.Windows.Point(110,100))==MiniGestureEnd.Drag,"second press can become a drag instead of expanding");
+   gesture.Down(point,500);Assert(gesture.Up(point)==MiniGestureEnd.Click,"drag clears previous click candidate");
+   gesture.Down(point,1100);Assert(gesture.Up(point)==MiniGestureEnd.Click,"slow pair stays two single clicks");
+   var distant=new System.Windows.Point(120,100);gesture.Down(distant,1200);Assert(gesture.Up(distant)==MiniGestureEnd.Click,"spatially separate clicks never expand");
+   gesture.Down(distant,1250);gesture.Cancel();Assert(gesture.Up(distant)==MiniGestureEnd.None&&!gesture.Active,"lost capture cancels without expansion");
+   gesture.Down(point,1400);gesture.Move(new System.Windows.Point(120,100));gesture.Move(point);Assert(gesture.Up(point)==MiniGestureEnd.Drag,"drag remains a drag after pointer returns to start");
+   for(uint i=0;i<10;i++){gesture.Down(point,2000+i*30);if(!gesture.Move(new System.Windows.Point(105,100))||gesture.Up(new System.Windows.Point(105,100))!=MiniGestureEnd.Drag)throw new Exception("Repeated drag failed");}
+   Assert(!gesture.Active,"10 consecutive quick drags succeed without click-count filtering");
+   for(uint i=0;i<11;i++){gesture.Down(point,4000+i*200);if(gesture.Up(point)!=MiniGestureEnd.Click)throw new Exception("Unexpected first click");gesture.Down(point,4100+i*200);if(gesture.Up(point)!=MiniGestureEnd.DoubleClick)throw new Exception("Repeated double click failed");}
+   Assert(!gesture.Active,"11 consecutive double-click pairs succeed");
+   gesture.Down(point,uint.MaxValue-50);gesture.Up(point);gesture.Down(point,49);Assert(gesture.Up(point)==MiniGestureEnd.DoubleClick,"input timestamps remain valid across tick-count wraparound");
   }
   public static int Feed(string path){
    try{using(var c=new MarketClient()){
