@@ -22,7 +22,7 @@ using Forms=System.Windows.Forms;
 
 [assembly:AssemblyTitle("BitGlance · 比特一瞥")]
 [assembly:AssemblyDescription("BTC ETH SOL USDT perpetual desktop price widget")]
-[assembly:AssemblyVersion("1.2.1.0")]
+[assembly:AssemblyVersion("1.2.2.0")]
 [assembly:AssemblyCopyright("BitGlance contributors; window placement based on PayDance © 2026 Mr.Baoboer")]
 namespace BitGlance {
  public sealed class Preferences {
@@ -283,7 +283,7 @@ namespace BitGlance {
    dialog.ShowDialog();
   }
   void About(Window owner){
-   MessageBox.Show(owner,"比特一瞥 BitGlance 1.2.1\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
+   MessageBox.Show(owner,"比特一瞥 BitGlance 1.2.2\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
   }
   public void Exit(){if(exiting)return;CapturePosition();Save();Cleanup();app.Shutdown();}
   void Cleanup(){if(exiting)return;exiting=true;Microsoft.Win32.SystemEvents.DisplaySettingsChanged-=DisplayChanged;timer.Stop();cts.Cancel();cts.Dispose();client.Dispose();if(tray!=null){tray.Visible=false;tray.Dispose();}}
@@ -306,5 +306,3 @@ namespace BitGlance {
   }
  }
 }
-
-

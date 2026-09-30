@@ -1,0 +1,30 @@
+# Build output and local verification data
+/artifacts/
+/work/
+/dist/
+/bin/
+/obj/
+*.exe
+*.dll
+*.pdb
+*.zip
+/BitGlance.exe.config
+/BitGlance.exe.sha256
+/*预览.png
+
+# Personal settings, editor state and credentials
+.vs/
+.vscode/
+*.user
+*.suo
+*.tmp
+*.log
+**/*settings.json
+.env
+.env.*
+*.pfx
+*.p12
+*.pem
+*.key
+Thumbs.db
+.DS_Store

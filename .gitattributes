@@ -4,6 +4,10 @@
 *.ps1 text eol=crlf
 *.md text eol=lf
 *.sha256 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
 *.png binary
 *.ico binary
 *.exe binary
