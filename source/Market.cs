@@ -16,7 +16,7 @@ namespace BitGlance {
   public DateTime ReceivedUtc, MarketUtc;
   public bool IsStale(DateTime now) { return (now - MarketUtc).TotalSeconds > 120; }
  }
- public sealed class Candle { public long Time; public decimal Close; }
+ public sealed class Candle { public long Time; public decimal Open,High,Low,Close,Volume; }
  public sealed class TickerEnvelope { public string code {get;set;} public Dictionary<string,object>[] data {get;set;} }
  public sealed class CandleEnvelope { public string code {get;set;} public object[][] data {get;set;} }
  public sealed class FeedException : Exception {
@@ -27,7 +27,7 @@ namespace BitGlance {
   readonly HttpClient client;
   public MarketClient() {
    client = new HttpClient(); client.Timeout=TimeSpan.FromSeconds(12);
-   client.DefaultRequestHeaders.UserAgent.ParseAdd("BitGlance/1.1");
+   client.DefaultRequestHeaders.UserAgent.ParseAdd("BitGlance/1.2");
   }
   async Task<string> Get(string url,CancellationToken token) {
    using(var r=await client.GetAsync(url,token).ConfigureAwait(false)) {
@@ -45,9 +45,16 @@ namespace BitGlance {
    if(!IsSupported(symbol))throw new ArgumentException("Unsupported contract");
    return ParseTicker(await Get("https://api.bitget.com/api/v2/mix/market/ticker?symbol="+symbol+"&productType=USDT-FUTURES",token).ConfigureAwait(false),symbol,DateTime.UtcNow);
   }
-  public async Task<List<Candle>> FetchCandles(string symbol,bool week,CancellationToken token) {
+  public static readonly string[] Intervals={"1m","5m","15m","1H"};
+  public static bool IsInterval(string interval){return Intervals.Contains(interval);}
+  public static int IntervalMinutes(string interval){if(!IsInterval(interval))throw new ArgumentException("Unsupported interval");return interval=="1H"?60:int.Parse(interval.TrimEnd('m'),CultureInfo.InvariantCulture);}
+  public Task<List<Candle>> FetchCandles(string symbol,bool week,CancellationToken token) {
+   return FetchCandles(symbol,week?"1H":"5m",week?169:289,token);
+  }
+  public async Task<List<Candle>> FetchCandles(string symbol,string interval,int limit,CancellationToken token) {
    if(!IsSupported(symbol))throw new ArgumentException("Unsupported contract");
-   string query=week?"1H&limit=169":"5m&limit=289";
+   if(!IsInterval(interval)||limit<2||limit>1000)throw new ArgumentException("Unsupported chart request");
+   string query=interval+"&limit="+limit.ToString(CultureInfo.InvariantCulture);
    string json=await Get("https://api.bitget.com/api/v2/mix/market/candles?symbol="+symbol+"&productType=USDT-FUTURES&granularity="+query+"&kLineType=MARKET",token).ConfigureAwait(false);
    var envelope=new JavaScriptSerializer().Deserialize<CandleEnvelope>(json);
    if(envelope==null||envelope.code!="00000"||envelope.data==null)throw new FormatException("历史行情接口返回错误");
@@ -73,14 +80,17 @@ namespace BitGlance {
    if(rows==null || rows.Length<2) throw new FormatException("历史行情不足");
    var candles=new List<Candle>();
    foreach(var row in rows) {
-    if(row.Length<7) throw new FormatException("历史行情格式错误");
-    long time=Convert.ToInt64(row[0],CultureInfo.InvariantCulture);
-    decimal close=decimal.Parse(Convert.ToString(row[4],CultureInfo.InvariantCulture),CultureInfo.InvariantCulture);
-    if(time<=0||close<=0) throw new FormatException("历史行情无效");
-    candles.Add(new Candle{Time=time,Close=close});
+    if(row==null||row.Length<7) throw new FormatException("历史行情格式错误");
+    long time;
+    if(!long.TryParse(Convert.ToString(row[0],CultureInfo.InvariantCulture),NumberStyles.Integer,CultureInfo.InvariantCulture,out time)||time<=0||time>253402300799999L)throw new FormatException("历史行情时间无效");
+    var c=new Candle{Time=time,Open=CandleNumber(row[1]),High=CandleNumber(row[2]),Low=CandleNumber(row[3]),Close=CandleNumber(row[4]),Volume=CandleNumber(row[5])};
+    if(c.Open<=0||c.Close<=0||c.Low<=0||c.High<c.Low||c.High<Math.Max(c.Open,c.Close)||c.Low>Math.Min(c.Open,c.Close)||c.Volume<0)throw new FormatException("历史行情 OHLC 数据无效");
+    candles.Add(c);
    }
-   return candles.GroupBy(c=>c.Time).Select(g=>g.Last()).OrderBy(c=>c.Time).ToList();
+   var result=candles.GroupBy(c=>c.Time).Select(g=>g.Last()).OrderBy(c=>c.Time).ToList();
+   if(result.Count<2)throw new FormatException("历史行情不足");return result;
   }
+  static decimal CandleNumber(object value){decimal n;if(!decimal.TryParse(Convert.ToString(value,CultureInfo.InvariantCulture),NumberStyles.Float,CultureInfo.InvariantCulture,out n))throw new FormatException("历史行情数值无效");return n;}
   public void Dispose(){client.Dispose();}
  }
 }

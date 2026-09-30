@@ -22,7 +22,7 @@ using Forms=System.Windows.Forms;
 
 [assembly:AssemblyTitle("BitGlance · 比特一瞥")]
 [assembly:AssemblyDescription("BTC ETH SOL USDT perpetual desktop price widget")]
-[assembly:AssemblyVersion("1.1.0.0")]
+[assembly:AssemblyVersion("1.2.0.0")]
 [assembly:AssemblyCopyright("BitGlance contributors; window placement based on PayDance © 2026 Mr.Baoboer")]
 namespace BitGlance {
  public sealed class Preferences {
@@ -34,9 +34,11 @@ namespace BitGlance {
   public bool Dark {get;set;}
   public bool Pinned {get;set;}
   public bool Mini {get;set;}
+  public bool Candles {get;set;}
+  public string ChartInterval {get;set;}
   public SavedPosition MainPosition {get;set;}
   public SavedPosition MiniPosition {get;set;}
-  public Preferences(){Interval=15;Opacity=95;Symbol="BTCUSDT";ShowChange=true;ShowUnit=true;}
+  public Preferences(){Interval=15;Opacity=95;Symbol="BTCUSDT";ShowChange=true;ShowUnit=true;ChartInterval="5m";}
  }
  public static class Program {
   static Mutex mutex; static EventWaitHandle signal;
@@ -61,7 +63,7 @@ namespace BitGlance {
   readonly Application app;readonly Window window;readonly PriceChart chart=new PriceChart();readonly MarketClient client=new MarketClient();
   readonly DispatcherTimer timer=new DispatcherTimer();readonly string settingsPath;
   Preferences prefs;Forms.NotifyIcon tray;Quote quote;CancellationTokenSource cts=new CancellationTokenSource();
-  DateTime next=DateTime.UtcNow,chartAt=DateTime.MinValue;bool loading,chartLoading,week,offline,exiting;int generation,chartGeneration,failures;string errorText="";
+  DateTime next=DateTime.UtcNow,chartAt=DateTime.MinValue;bool loading,chartLoading,chartFailed,week,offline,exiting;int generation,chartGeneration,failures;string errorText="";
   T Find<T>(string name) where T:FrameworkElement {return (T)window.FindName(name);}
   void Text(string name,string value){Find<TextBlock>(name).Text=value;}
   Brush Brush(string key){return (Brush)window.Resources[key];}
@@ -73,6 +75,7 @@ namespace BitGlance {
    using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("MainWindow.xaml")) window=(Window)XamlReader.Load(stream);
    app.MainWindow=window;
    Find<ContentControl>("ChartHost").Content=chart;
+   chart.ViewChanged+=UpdateChartAxis;
    Bind("CloseButton",Exit);Bind("HideButton",()=>{CapturePosition();Save();window.Hide();});
    Find<ContentControl>("PriceTarget").MouseDoubleClick+=(s,e)=>{if(e.ChangedButton==MouseButton.Left){SetMode(true);e.Handled=true;}};
    Find<ContentControl>("MiniTarget").MouseDoubleClick+=(s,e)=>{if(e.ChangedButton==MouseButton.Left){ShowFull();e.Handled=true;}};
@@ -81,6 +84,8 @@ namespace BitGlance {
    Bind("PinButton",()=>{prefs.Pinned=!prefs.Pinned;ApplyPinned();Save();});
    Bind("RefreshButton",()=>{if(!loading){chartAt=DateTime.MinValue;next=DateTime.UtcNow;Refresh();}});
    Bind("SettingsButton",Settings);Bind("DayButton",()=>SetRange(false));Bind("WeekButton",()=>SetRange(true));
+   Bind("LineButton",()=>SetChartMode(false));Bind("CandleButton",()=>SetChartMode(true));Bind("LatestButton",()=>chart.Latest());
+   foreach(var interval in MarketClient.Intervals){string value=interval;Bind("Interval"+value+"Button",()=>SetInterval(value));}
    Find<Grid>("TitleBar").MouseLeftButtonDown+=Drag;
    Find<Grid>("MiniView").MouseLeftButtonDown+=(s,e)=>{if(prefs.Mini&&e.ClickCount==1)Drag(s,e);};
    window.KeyDown+=(s,e)=>{if(e.Key==Key.F5){chartAt=DateTime.MinValue;Refresh();}if(e.Key==Key.Escape && prefs.Mini)ShowFull();if(e.Key==Key.M && Keyboard.Modifiers==ModifierKeys.Control)SetMode(!prefs.Mini);};
@@ -94,7 +99,7 @@ namespace BitGlance {
   void DisplayChanged(object s,EventArgs e){window.Dispatcher.BeginInvoke(new Action(RestorePosition));}
   void Bind(string name,Action action){Find<Button>(name).Click+=(s,e)=>action();}
   Preferences Load(){
-   try {var p=new JavaScriptSerializer().Deserialize<Preferences>(File.ReadAllText(settingsPath));if(p==null)throw new Exception();p.Interval=new[]{5,15,30,60}.Contains(p.Interval)?p.Interval:15;p.Opacity=WindowPlacement.Opacity(p.Opacity);p.Symbol=MarketClient.IsSupported(p.Symbol)?p.Symbol:"BTCUSDT";return p;}catch{return new Preferences();}
+   try {var p=new JavaScriptSerializer().Deserialize<Preferences>(File.ReadAllText(settingsPath));if(p==null)throw new Exception();p.Interval=new[]{5,15,30,60}.Contains(p.Interval)?p.Interval:15;p.Opacity=WindowPlacement.Opacity(p.Opacity);p.Symbol=MarketClient.IsSupported(p.Symbol)?p.Symbol:"BTCUSDT";p.ChartInterval=MarketClient.IsInterval(p.ChartInterval)?p.ChartInterval:"5m";return p;}catch{return new Preferences();}
   }
   void Save(){
    try {Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));string tmp=settingsPath+".tmp";File.WriteAllText(tmp,new JavaScriptSerializer().Serialize(prefs));if(File.Exists(settingsPath))File.Replace(tmp,settingsPath,null);else File.Move(tmp,settingsPath);}catch { }
@@ -110,7 +115,12 @@ namespace BitGlance {
    window.ShowInTaskbar=!prefs.Mini;window.Opacity=1;
    Find<Border>("Shell").Opacity=prefs.Mini?prefs.Opacity/100.0:1;
    Find<TextBlock>("MiniUnit").Visibility=prefs.ShowUnit?Visibility.Visible:Visibility.Collapsed;
-   if(!prefs.Mini){window.Width=456;window.Height=618;}else ResizeMini();
+   if(!prefs.Mini){
+    double desired=prefs.Candles?744:642;window.Width=456;window.Height=Math.Min(desired,Math.Max(560,SystemParameters.WorkArea.Height-20));double shrink=desired-window.Height;
+    ((RowDefinition)window.FindName("ChartRow")).Height=new GridLength((prefs.Candles?287:185)-shrink);
+    ((RowDefinition)window.FindName("PlotRow")).Height=new GridLength(Math.Max(30,(prefs.Candles?188:104)-shrink));
+    ((RowDefinition)window.FindName("HintRow")).Height=new GridLength(prefs.Candles?18:0);
+   }else ResizeMini();
    ApplyPinned();
   }
   void ResizeMini(){
@@ -126,15 +136,15 @@ namespace BitGlance {
   void ApplyTheme(){
    string[] keys={"Surface","Ink","Muted","Line","Soft"};string[] colors=prefs.Dark?new[]{"#1C2420","#EFF2EC","#96A49A","#354139","#29352D"}:new[]{"#FCFBF8","#242B29","#828980","#E8E9E2","#F2F3EE"};
    for(int i=0;i<keys.Length;i++)window.Resources[keys[i]]=new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[i]));
-   chart.Dark=prefs.Dark;chart.InvalidateVisual();ApplyPinned();ApplyRangeButtons();ApplyAssetButtons();UpdateQuote();
+   chart.Dark=prefs.Dark;chart.InvalidateVisual();ApplyPinned();ApplyRangeButtons();ApplyChartButtons();ApplyAssetButtons();UpdateQuote();
   }
   string Asset {get{return prefs.Symbol.Replace("USDT","");}}
   string PriceFormat {get{return Asset=="SOL"?"N3":"N2";}}
   void ApplyAssetButtons(){string[] ids={"BtcButton","EthButton","SolButton"};for(int i=0;i<ids.Length;i++){var b=Find<Button>(ids[i]);bool selected=prefs.Symbol==MarketClient.Symbols[i];b.Background=selected?Brush("Soft"):Brushes.Transparent;b.Foreground=selected?Brush("Accent"):Brush("Muted");}}
   void SelectSymbol(string symbol){
    if(!MarketClient.IsSupported(symbol)||prefs.Symbol==symbol)return;
-   prefs.Symbol=symbol;generation++;chartGeneration++;cts.Cancel();cts.Dispose();cts=new CancellationTokenSource();quote=null;offline=false;loading=false;chartLoading=false;failures=0;chartAt=DateTime.MinValue;chart.Data.Clear();chart.InvalidateVisual();
-   Text("ChartTitle","价格走势");Text("ChartStart",week?"7 天前":"24 小时前");Text("ChartEnd","现在");Find<Button>("RefreshButton").IsEnabled=true;ApplyAssetButtons();UpdateQuote();Save();next=DateTime.UtcNow;Refresh();
+   prefs.Symbol=symbol;generation++;cts.Cancel();cts.Dispose();cts=new CancellationTokenSource();quote=null;offline=false;loading=false;failures=0;ResetChart();
+   Find<Button>("RefreshButton").IsEnabled=true;ApplyAssetButtons();UpdateQuote();Save();next=DateTime.UtcNow;Refresh();
   }
   ContextMenu MakeMenu(){var m=new ContextMenu();Add(m,"显示主窗口",ShowFull);Add(m,"迷你悬浮窗",()=>SetMode(true));var assets=new MenuItem{Header="切换永续合约"};foreach(var symbol in MarketClient.Symbols){string selected=symbol;var item=new MenuItem{Header=symbol.Replace("USDT","")+" / USDT"};item.Click+=(s,e)=>SelectSymbol(selected);assets.Items.Add(item);}m.Items.Add(assets);Add(m,"立即刷新",()=>Refresh());Add(m,"设置",Settings);m.Items.Add(new Separator());Add(m,"退出",Exit);return m;}
   void Add(ContextMenu menu,string text,Action action){var item=new MenuItem{Header=text};item.Click+=(s,e)=>action();menu.Items.Add(item);}
@@ -145,7 +155,26 @@ namespace BitGlance {
    var menu=new Forms.ContextMenuStrip();menu.Items.Add("显示主窗口",null,(s,e)=>window.Dispatcher.BeginInvoke(new Action(ShowFull)));menu.Items.Add("迷你悬浮窗",null,(s,e)=>window.Dispatcher.BeginInvoke(new Action(()=>{window.Show();SetMode(true);})));menu.Items.Add("立即刷新",null,(s,e)=>window.Dispatcher.BeginInvoke(new Action(()=>Refresh())));menu.Items.Add("退出",null,(s,e)=>window.Dispatcher.BeginInvoke(new Action(Exit)));tray.ContextMenuStrip=menu;
   }
   void ApplyRangeButtons(){Find<Button>("DayButton").Background=week?Brushes.Transparent:Brush("Soft");Find<Button>("WeekButton").Background=week?Brush("Soft"):Brushes.Transparent;Find<Button>("DayButton").Foreground=week?Brush("Muted"):Brush("Ink");Find<Button>("WeekButton").Foreground=week?Brush("Ink"):Brush("Muted");}
-  void SetRange(bool value){if(week==value)return;week=value;chartGeneration++;chartLoading=false;chart.Data.Clear();chart.InvalidateVisual();chartAt=DateTime.MinValue;Text("ChartStart",week?"7 天前":"24 小时前");ApplyRangeButtons();RefreshChart();}
+  void SetRange(bool value){if(week==value||prefs.Candles)return;week=value;ResetChart();ApplyRangeButtons();RefreshChart();}
+  void ApplyChartButtons(){
+   chart.Candlesticks=prefs.Candles;chart.IntervalMinutes=MarketClient.IntervalMinutes(prefs.ChartInterval);chart.Cursor=prefs.Candles?Cursors.Cross:Cursors.Arrow;
+   string[] modes={"LineButton","CandleButton"};for(int i=0;i<2;i++){var b=Find<Button>(modes[i]);bool active=prefs.Candles==(i==1);b.Background=active?Brush("Soft"):Brushes.Transparent;b.Foreground=active?Brush("Accent"):Brush("Muted");}
+   Find<StackPanel>("LineRanges").Visibility=prefs.Candles?Visibility.Collapsed:Visibility.Visible;Find<StackPanel>("CandleIntervals").Visibility=prefs.Candles?Visibility.Visible:Visibility.Collapsed;Find<Button>("LatestButton").Visibility=prefs.Candles?Visibility.Visible:Visibility.Collapsed;
+   foreach(string interval in MarketClient.Intervals){var b=Find<Button>("Interval"+interval+"Button");b.Background=interval==prefs.ChartInterval?Brush("Soft"):Brushes.Transparent;b.Foreground=interval==prefs.ChartInterval?Brush("Ink"):Brush("Muted");}
+   UpdateChartAxis();
+  }
+  void ResetChart(){chartGeneration++;chartLoading=false;chartFailed=false;chartAt=DateTime.MinValue;chart.Data=new System.Collections.Generic.List<Candle>();chart.Reset();Text("ChartTitle",prefs.Candles?"K 线 · 正在读取…":"价格走势 · 正在读取…");}
+  void SetChartMode(bool candles){if(prefs.Candles==candles)return;CapturePosition();prefs.Candles=candles;ResetChart();ApplyChartButtons();ApplyMode();RestorePosition();Save();RefreshChart();}
+  void SetInterval(string interval){if(!MarketClient.IsInterval(interval)||prefs.ChartInterval==interval)return;prefs.ChartInterval=interval;ResetChart();ApplyChartButtons();Save();RefreshChart();}
+  void UpdateChartAxis(){
+   var rows=chart.Visible;
+   Text("ChartStart",rows.Count==0?"—":MarketClient.Unix(rows[0].Time).ToLocalTime().ToString("MM/dd HH:mm"));
+   Text("ChartEnd",rows.Count==0?"—":MarketClient.Unix(rows[rows.Count-1].Time).ToLocalTime().ToString("MM/dd HH:mm"));
+   Find<Button>("LatestButton").Foreground=chart.View.Following?Brush("Muted"):Brush("Accent");
+   Find<Button>("LatestButton").Content=chart.View.Following?"跟随最新":"最新 →";
+   if(prefs.Candles&&rows.Count>0&&!chartFailed)Text("ChartTitle",(prefs.ChartInterval=="1H"?"1 小时":MarketClient.IntervalMinutes(prefs.ChartInterval)+" 分钟")+" · "+(!chart.View.Following?"查看历史":chart.IsOpen(rows.Last())?"末根未收盘":"末根已收盘"));
+   Find<TextBlock>("ChartHint").ToolTip=chart.Data.Count+" 根已载入 · 当前显示 "+rows.Count+" 根；← → 移动，+ − 缩放，Home 回到最新。成交量单位："+Asset;
+  }
   async void Refresh(){
    if(loading||exiting)return;loading=true;int version=generation;var token=cts.Token;Find<Button>("RefreshButton").IsEnabled=false;UpdateStatus();RefreshChart();
    try {
@@ -158,19 +187,20 @@ namespace BitGlance {
   }
   void Failure(string message,int delay){offline=true;errorText=message;failures++;next=DateTime.UtcNow.AddSeconds(Math.Max(delay,Math.Min(120,prefs.Interval*Math.Pow(2,Math.Min(3,failures-1)))));UpdateQuote();}
   async void RefreshChart(){
-   if(chartLoading||DateTime.UtcNow-chartAt<TimeSpan.FromSeconds(60)||exiting)return;
-   chartLoading=true;int version=generation,rangeVersion=chartGeneration;bool range=week;var token=cts.Token;
+   if(chartLoading||DateTime.UtcNow-chartAt<TimeSpan.FromSeconds(prefs.Candles?15:60)||exiting)return;
+   chartLoading=true;int version=generation,rangeVersion=chartGeneration;bool range=week,candles=prefs.Candles;string interval=prefs.ChartInterval;var token=cts.Token;
    if(chart.Data.Count==0){Text("ChartMessage","正在读取真实行情…");Find<TextBlock>("ChartMessage").Visibility=Visibility.Visible;}
    try {
-    var rows=await client.FetchCandles(prefs.Symbol,range,token);if(version!=generation||rangeVersion!=chartGeneration||exiting)return;
-    chart.Data=rows;chartAt=DateTime.UtcNow;chart.InvalidateVisual();Find<TextBlock>("ChartMessage").Visibility=Visibility.Collapsed;
-    Text("ChartTitle",week?"价格走势 · 1 小时采样":"价格走势 · 5 分钟采样");Text("ChartStart",MarketClient.Unix(rows[0].Time).ToLocalTime().ToString(week?"MM/dd":"HH:mm"));Text("ChartEnd",MarketClient.Unix(rows[rows.Count-1].Time).ToLocalTime().ToString(week?"MM/dd HH:mm":"HH:mm"));
-    System.Windows.Automation.AutomationProperties.SetName(chart,Asset+" / USDT 永续价格走势图，"+rows.Count+"个数据点");
-   }catch {if(version==generation&&rangeVersion==chartGeneration&&!exiting){Text("ChartMessage",chart.Data.Count==0?"走势图暂不可用 · 将自动重试":"");Find<TextBlock>("ChartMessage").Visibility=chart.Data.Count==0?Visibility.Visible:Visibility.Collapsed;Text("ChartTitle","历史曲线 · 更新失败");chartAt=DateTime.UtcNow;}}
+    var rows=await (candles?client.FetchCandles(prefs.Symbol,interval,300,token):client.FetchCandles(prefs.Symbol,range,token));if(version!=generation||rangeVersion!=chartGeneration||exiting)return;
+    chartFailed=false;chart.Data=rows;chartAt=DateTime.UtcNow;Find<TextBlock>("ChartMessage").Visibility=Visibility.Collapsed;
+    if(!candles)Text("ChartTitle",week?"价格走势 · 1 小时采样":"价格走势 · 5 分钟采样");
+    Find<TextBlock>("ChartTitle").ToolTip="行情源：Bitget USDT 永续 · 更新于 "+chartAt.ToLocalTime().ToString("HH:mm:ss")+(candles?" · 每根包含开、高、低、收与成交量":" · 折线连接各根收盘价");
+    System.Windows.Automation.AutomationProperties.SetName(chart,Asset+" / USDT 永续"+(candles?"K 线图":"价格走势图")+"，"+rows.Count+"个数据点");
+   }catch {if(version==generation&&rangeVersion==chartGeneration&&!exiting){chartFailed=true;Text("ChartMessage",chart.Data.Count==0?"走势图暂不可用 · 将自动重试":"");Find<TextBlock>("ChartMessage").Visibility=chart.Data.Count==0?Visibility.Visible:Visibility.Collapsed;Text("ChartTitle",chart.Data.Count==0?"图表 · 读取失败":"图表 · 更新失败，保留旧数据");chartAt=DateTime.UtcNow;}}
    finally {if(version==generation&&rangeVersion==chartGeneration)chartLoading=false;}
   }
   void UpdateQuote(){
-   chart.PriceFormat=PriceFormat;
+   chart.PriceFormat=PriceFormat;chart.Asset=Asset;
    Text("PairLabel",Asset+" / USDT 永续");Text("UnitLabel","USDT");Text("MiniUnit","USDT");
    Text("AssetName",Asset=="BTC"?"Bitcoin":Asset=="ETH"?"Ethereum":"Solana");Text("AssetGlyph",Asset=="BTC"?"₿":Asset=="ETH"?"Ξ":"S");Text("VolumeCaption","24h 成交量 · "+Asset);
    Text("SourceLabel","Bitget · USDT 永续 · 最新成交价");
@@ -222,7 +252,7 @@ namespace BitGlance {
    dialog.ShowDialog();
   }
   void About(Window owner){
-   MessageBox.Show(owner,"比特一瞥 BitGlance 1.1\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
+   MessageBox.Show(owner,"比特一瞥 BitGlance 1.2\n\n参考 PayDance 的桌面交互与窗口位置恢复实现。\n这是修改与移植版本，非 PayDance 官方产品。\n\nBased on PayDance. Copyright (C) 2026 Mr.Baoboer.\nLicensed under the GNU Affero General Public License v3.0 only.\n附加条款：legal/ADDITIONAL_TERMS.md\n\n完整源码与构建脚本位于应用旁的 source 文件夹。\n本应用不含交易功能、不需要账号。\n设置仅保存于本机 LocalAppData/BitGlance。\n\n行情来源：Bitget USDT 永续合约，最新成交价。\n上游：https://github.com/MrBaoboer/PayDance","关于与开源",MessageBoxButton.OK,MessageBoxImage.Information);
   }
   public void Exit(){if(exiting)return;CapturePosition();Save();Cleanup();app.Shutdown();}
   void Cleanup(){if(exiting)return;exiting=true;Microsoft.Win32.SystemEvents.DisplaySettingsChanged-=DisplayChanged;timer.Stop();cts.Cancel();cts.Dispose();client.Dispose();if(tray!=null){tray.Visible=false;tray.Dispose();}}

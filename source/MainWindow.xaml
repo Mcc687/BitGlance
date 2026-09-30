@@ -11,7 +11,7 @@
   <Border x:Name="Shell" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="19" IsHitTestVisible="False"/>
   <Grid>
    <Grid x:Name="FullView" Margin="25,0,25,20">
-    <Grid.RowDefinitions><RowDefinition Height="53"/><RowDefinition Height="108"/><RowDefinition Height="88"/><RowDefinition Height="161"/><RowDefinition Height="82"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="53"/><RowDefinition Height="108"/><RowDefinition Height="88"/><RowDefinition x:Name="ChartRow" Height="185"/><RowDefinition Height="82"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <Grid x:Name="TitleBar" Background="Transparent" Margin="-10,0,-14,0">
      <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"><TextBlock Text="比特一瞥" FontWeight="SemiBold" FontSize="12"/><TextBlock Text=" / BITGLANCE" FontSize="9" Margin="6,3,0,0" Foreground="{DynamicResource Muted}"/></StackPanel>
      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -35,11 +35,15 @@
      <StackPanel Orientation="Horizontal" Margin="0,5,0,0"><Border x:Name="ChangePill" Background="{DynamicResource Soft}" CornerRadius="6" Padding="7,4"><TextBlock x:Name="ChangeLabel" Text="等待行情" FontFamily="Segoe UI" FontWeight="SemiBold" FontSize="12"/></Border><TextBlock x:Name="ChangeCaption" Text="过去 24 小时" Foreground="{DynamicResource Muted}" Margin="9,4,0,0" FontSize="11"/></StackPanel>
     </StackPanel>
     <Grid Grid.Row="3" Margin="0,9,0,0">
-     <Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="107"/><RowDefinition Height="22"/></Grid.RowDefinitions>
-     <TextBlock x:Name="ChartTitle" Text="价格走势" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
-     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button x:Name="DayButton" Content="24H" FontFamily="Segoe UI" FontSize="10" Background="{DynamicResource Soft}" Foreground="{DynamicResource Ink}" Padding="9,4"/><Button x:Name="WeekButton" Content="7D" FontFamily="Segoe UI" FontSize="10" Padding="9,4"/></StackPanel>
-     <Grid Grid.Row="1"><ContentControl x:Name="ChartHost"/><TextBlock x:Name="ChartMessage" Text="正在读取真实行情…" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Muted}" FontSize="11"/></Grid>
-     <TextBlock Grid.Row="2" x:Name="ChartStart" Text="24 小时前" FontFamily="Segoe UI" FontSize="10" Foreground="{DynamicResource Muted}"/><TextBlock Grid.Row="2" x:Name="ChartEnd" Text="现在" FontSize="10" HorizontalAlignment="Right" Foreground="{DynamicResource Muted}"/>
+     <Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="22"/><RowDefinition x:Name="PlotRow" Height="104"/><RowDefinition Height="22"/><RowDefinition x:Name="HintRow" Height="0"/></Grid.RowDefinitions>
+     <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"><Button x:Name="LineButton" Content="折线" FontSize="11" Padding="10,4"/><Button x:Name="CandleButton" Content="K 线" FontSize="11" Padding="10,4" Margin="3,0,0,0"/></StackPanel>
+     <StackPanel x:Name="LineRanges" Orientation="Horizontal" HorizontalAlignment="Right"><Button x:Name="DayButton" Content="24H" FontFamily="Segoe UI" FontSize="10" Padding="9,4"/><Button x:Name="WeekButton" Content="7D" FontFamily="Segoe UI" FontSize="10" Padding="9,4"/></StackPanel>
+     <StackPanel x:Name="CandleIntervals" Visibility="Collapsed" Orientation="Horizontal" HorizontalAlignment="Right"><Button x:Name="Interval1mButton" Content="1m" FontSize="10" Padding="9,4" ToolTip="每根 1 分钟"/><Button x:Name="Interval5mButton" Content="5m" FontSize="10" Padding="9,4" ToolTip="每根 5 分钟"/><Button x:Name="Interval15mButton" Content="15m" FontSize="10" Padding="9,4" ToolTip="每根 15 分钟"/><Button x:Name="Interval1HButton" Content="1h" FontSize="10" Padding="9,4" ToolTip="每根 1 小时"/></StackPanel>
+     <TextBlock Grid.Row="1" x:Name="ChartTitle" Text="价格走势" FontSize="10" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+     <Button Grid.Row="1" x:Name="LatestButton" Content="最新 →" FontSize="10" Padding="7,1" HorizontalAlignment="Right" Visibility="Collapsed" ToolTip="回到最新 K 线 · Home"/>
+     <Grid Grid.Row="2"><ContentControl x:Name="ChartHost"/><TextBlock x:Name="ChartMessage" Text="正在读取真实行情…" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Muted}" FontSize="11" IsHitTestVisible="False"/></Grid>
+     <TextBlock Grid.Row="3" x:Name="ChartStart" Text="24 小时前" FontFamily="Segoe UI" FontSize="10" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/><TextBlock Grid.Row="3" x:Name="ChartEnd" Text="现在" FontSize="10" HorizontalAlignment="Right" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+     <TextBlock Grid.Row="4" x:Name="ChartHint" Text="滚轮缩放 · 拖动历史 · 悬停查看详情 · 绿涨红跌" FontSize="10" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
     </Grid>
     <Border Grid.Row="4" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,1" Margin="0,8,0,4" Padding="0,13,0,9">
      <UniformGrid Columns="3"><StackPanel><TextBlock Text="24h 最高" FontSize="10" Foreground="{DynamicResource Muted}"/><TextBlock x:Name="HighLabel" Text="—" FontFamily="Segoe UI" FontWeight="SemiBold" FontSize="15" Margin="0,6,0,0"/></StackPanel><StackPanel><TextBlock Text="24h 最低" FontSize="10" Foreground="{DynamicResource Muted}"/><TextBlock x:Name="LowLabel" Text="—" FontFamily="Segoe UI" FontWeight="SemiBold" FontSize="15" Margin="0,6,0,0"/></StackPanel><StackPanel><TextBlock x:Name="VolumeCaption" Text="24h 成交量 · BTC" FontSize="10" Foreground="{DynamicResource Muted}"/><TextBlock x:Name="VolumeLabel" Text="—" FontFamily="Segoe UI" FontWeight="SemiBold" FontSize="15" Margin="0,6,0,0"/></StackPanel></UniformGrid>

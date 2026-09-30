@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 namespace BitGlance {
  public static class Checks {
@@ -27,8 +28,31 @@ namespace BitGlance {
     Assert(!MarketClient.IsSupported("BTCUSD")&&!MarketClient.IsSupported("DOGEUSDT"),"unsupported symbols are rejected");
     var legacy=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Preferences>("{\"Provider\":1,\"Interval\":30,\"Opacity\":30}");
     Assert(legacy.Symbol=="BTCUSDT" && legacy.ShowChange && legacy.ShowUnit && legacy.Opacity==30,"v1 settings migrate with visible fields and saved opacity");
-    var candles=MarketClient.ParseCandles("[[2000,1,1,1,\"2.5\",1,3],[1000,1,1,1,\"2\",1,3],[2000,1,1,1,\"3\",1,3]]");
+    var candles=MarketClient.ParseCandles("[[2000,2,4,1,\"2.5\",10,30],[1000,1,3,1,\"2\",0,0],[2000,2,4,1,\"3\",11,33]]");
     Assert(candles.Count==2 && candles[0].Time==1000 && candles[1].Close==3,"chart sorts timestamps and removes duplicate candles");
+    Assert(candles[1].Open==2&&candles[1].High==4&&candles[1].Low==1&&candles[1].Volume==11,"candles keep real OHLC and base-asset volume");
+    const string bars="[[1000,2,3,1,2,0,0],[2000,2,3,1,2,10,20]]";
+    Reject(()=>MarketClient.ParseCandles(bars.Replace("2,3,1,2","4,3,1,2")),"rejects open above candle high");
+    Reject(()=>MarketClient.ParseCandles(bars.Replace("2,3,1,2","2,3,2.5,2")),"rejects low above open or close");
+    Reject(()=>MarketClient.ParseCandles(bars.Replace("10,20","-10,20")),"rejects negative candle volume");
+    Reject(()=>MarketClient.ParseCandles(bars.Replace("2000","1000")),"requires two distinct candle timestamps");
+    Reject(()=>MarketClient.ParseCandles(bars.Replace("2000","999999999999999")),"rejects out of range candle timestamps");
+    Assert(MarketClient.ParseCandles(bars)[0].Volume==0,"flat candles with no trades remain valid");
+    Assert(!legacy.Candles&&legacy.ChartInterval=="5m","old settings default to line chart and 5m candles");
+    Assert(MarketClient.Intervals.Select(MarketClient.IntervalMinutes).SequenceEqual(new[]{1,5,15,60}),"four supported candle periods map to correct durations");
+    var history=Enumerable.Range(0,300).Select(i=>new Candle{Time=(i+1)*60000L,Open=2,High=3,Low=1,Close=2,Volume=0}).ToList();
+    var view=new ChartViewport();view.Update(new List<Candle>(),history);
+    Assert(view.First==240&&view.Count==60&&view.Following,"initial candle view follows latest 60 bars");
+    view.Pan(-50);long anchor=history[view.First].Time;
+    var rolled=history.Skip(1).Concat(new[]{new Candle{Time=301*60000L}}).ToList();view.Update(history,rolled);
+    Assert(rolled[view.First].Time==anchor&&!view.Following,"polling preserves history by timestamp when oldest bar expires");
+    view.Latest();view.Update(rolled,history);Assert(view.First==240&&view.Following,"live view remains attached to newest candle on refresh");
+    view.Zoom(100,1);Assert(view.Count==20&&view.First==280,"zoom in stops at 20 candles and anchors latest edge");
+    view.Zoom(-100,1);Assert(view.Count==160&&view.First==140,"zoom out stops at 160 candles and anchors latest edge");
+    view.Pan(-9999);Assert(view.First==0&&!view.Following,"pan clamps to oldest loaded candle");
+    view.Pan(9999);Assert(view.First==140&&view.Following,"pan clamps to latest loaded candle");
+    view.Update(history,candles);Assert(view.First==0&&view.Count==2,"short histories never create invalid viewport indices");
+    view.Update(candles,new List<Candle>());view.Zoom(1,0.5);view.Pan(-1);Assert(view.Count==0&&view.First==0,"empty chart tolerates navigation while loading");
     Reject(()=>MarketClient.ParseCandles("[]"),"rejects missing chart history");
     Assert(!WindowPlacement.Usable(new SavedPosition{X=-32000,Y=-32000}),"minimize sentinel is never saved");
     Assert(WindowPlacement.Usable(new SavedPosition{X=-1600,Y=60}),"negative coordinates on a left monitor are valid");
@@ -52,6 +76,7 @@ namespace BitGlance {
      var week=c.FetchCandles(symbol,true,CancellationToken.None).GetAwaiter().GetResult();
      lines.Add("PASS Bitget USDT perpetual "+symbol+": "+q.Price.ToString(CultureInfo.InvariantCulture)+"; market UTC="+q.MarketUtc.ToString("o"));
      lines.Add("PASS "+symbol+" charts: "+day.Count+" 5m candles, "+week.Count+" 1h candles");
+     foreach(string period in MarketClient.Intervals){var rows=c.FetchCandles(symbol,period,300,CancellationToken.None).GetAwaiter().GetResult();long step=MarketClient.IntervalMinutes(period)*60000L;if(rows.Count<60||rows.Zip(rows.Skip(1),(a,b)=>b.Time-a.Time).Any(d=>d!=step))throw new Exception("Wrong candle period: "+symbol+" "+period);lines.Add("PASS "+symbol+" "+period+": "+rows.Count+" validated OHLCV candles; spacing "+step+" ms");}
     }
     lines.Add("Fetched UTC: "+DateTime.UtcNow.ToString("o"));File.WriteAllLines(path,lines.ToArray());
    }return 0;}catch(Exception e){File.WriteAllText(path,"FAIL "+e);return 1;}
